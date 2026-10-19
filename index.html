@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <title>ORBIT BREAKER: DEEP SPACE PROTOCOL v2.7 (FINAL FIX)</title>
-<iframe width="0" height="0" src="https://youtuberepeater.com/watch?v=NGbLFb80bqs#gsc.tab=0&gsc.q=Aaron%20Hibell%20destroyer%20of%20worlds&gsc.sort=" frameborder="0" allowfullscreen></iframe>
 <style>
 /* GLOBAL STYLES */
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
@@ -21,20 +20,6 @@ font-family: 'Rajdhani', sans-serif;
 overflow: hidden;
 width: 100vw; height: 100vh;
 display: flex; justify-content: center; align-items: center;
-}
-/* Subtle Grid Overlay for Tech Feel */
-body::before {
-content: " ";
-display: block;
-position: absolute;
-top: 0; left: 0; bottom: 0; right: 0;
-background-image:
-linear-gradient(var(--border-color) 1px, transparent 1px),
-linear-gradient(90deg, var(--border-color) 1px, transparent 1px);
-background-size: 40px 40px;
-opacity: 0.05;
-z-index: 100;
-pointer-events: none;
 }
 canvas {
 display: block;
@@ -370,7 +355,6 @@ display: none;
 text-align: center;
 white-space: pre-wrap;
 line-height: 1.5;
-/* FIXED: Increased animation time from 5s/12s to 20s */
 animation: fadeInOut 20s forwards; 
 }
 @keyframes fadeInOut {
@@ -530,11 +514,21 @@ background: var(--hud-danger);
 color: #fff;
 box-shadow: 0 0 15px var(--hud-danger);
 }
+
+/* Intro/Outro Canvas Overlays */
+#intro-canvas, #outro-canvas {
+position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+z-index: 50;
+display: none;
+pointer-events: none;
+}
 </style>
 </head>
 <body>
-<!-- REMOVED MUTE BUTTON AS REQUESTED -->
 <canvas id="gameCanvas"></canvas>
+<canvas id="intro-canvas"></canvas>
+<canvas id="outro-canvas"></canvas>
+
 <!-- HUD -->
 <div id="hud">
 <div class="stat-label">PILOT INTEGRITY</div>
@@ -617,7 +611,7 @@ box-shadow: 0 0 15px var(--hud-danger);
 <div class="system-msg">> SYSTEM ONLINE.<br>> LOADING NAVIGATION DATA...<br>> READY.</div>
 <h1>ORBIT BREAKER</h1>
 <p>Bio-Suit Protocol Active.<br>Navigate Space. Engage Guardians.</p>
-<button onclick="startGame()">START MISSION</button>
+<button onclick="startMissionSequence()">START MISSION</button>
 <button class="btn-secondary" onclick="toggleUpdateLog()">CHANGELOG</button>
 <button class="btn-secondary" onclick="toggleDevInfo()" style="border-color: var(--hud-secondary); color: var(--hud-secondary); margin-top: 10px;">DEVELOPER INFO</button>
 </div>
@@ -720,42 +714,47 @@ Have a great day!
 /**
 * CUSTOM MUSIC & SFX ENGINE
 */
-let globalMuted = false; // Kept variable for internal logic, though UI button is removed
+let globalMuted = false;
 let currentMusicTrack = null;
 
 // Define your music files here. 
-// IMPORTANT: These files must exist in a folder named 'music' next to your HTML file.
 const musicTracks = {
     menu: new Audio('music/menu_music.mp3'),      
     space: new Audio('music/space_music.mp3'),    
     boss1: new Audio('music/boss_sand.mp3'),      
     boss2: new Audio('music/boss_jungle.mp3'),    
     boss3: new Audio('music/boss_void.mp3'),      
-    epilogue: new Audio('music/epilogue.mp3')     
+    epilogue: new Audio('music/epilogue.mp3'),
+    outro: new Audio('music/outro_music.mp3') // NEW TRACK
 };
 
-// Configure tracks
 Object.values(musicTracks).forEach(track => {
     track.loop = true;
-    track.volume = 0.6; // Adjust volume here
+    track.volume = 0.6;
 });
 
 function initAudio() {
-    // Placeholder for compatibility
+    if (!audioCtx) {
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AC();
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        } catch(e) { console.warn("Audio disabled"); }
+    }
 }
 
 function playMusic(trackName) {
     if (!trackName || !musicTracks[trackName]) return;
     
-    // Stop previous track
     if (currentMusicTrack && currentMusicTrack !== musicTracks[trackName]) {
         currentMusicTrack.pause();
         currentMusicTrack.currentTime = 0;
     }
     
     currentMusicTrack = musicTracks[trackName];
-    // Catch errors silently if file missing to prevent crash
-    currentMusicTrack.play().catch(e => console.warn("Music failed to load/play:", e));
+    currentMusicTrack.play().catch(e => console.warn("Music failed:", e));
 }
 
 function stopMusic() {
@@ -905,6 +904,13 @@ function playSound(type) {
              gain.gain.setValueAtTime(0.05, now);
              gain.gain.linearRampToValueAtTime(0, now + 1.0);
              osc.start(now); osc.stop(now + 1.0);
+        } else if (type === 'fire_burst') {
+             osc.type = 'sawtooth';
+             osc.frequency.setValueAtTime(50, now);
+             osc.frequency.exponentialRampToValueAtTime(200, now + 0.1);
+             gain.gain.setValueAtTime(0.1, now);
+             gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+             osc.start(now); osc.stop(now + 0.2);
         }
     } catch(e) {}
 }
@@ -936,8 +942,10 @@ GAMEOVER: 11,
 DEFEAT_SCREEN: 12,
 BOSS_3_PHASE_2: 13,
 DIVE_EFFECT: 14,
-EXPLORE_MODE: 15, // New State for moving on planet
-EPILOGUE: 16 
+EXPLORE_MODE: 15,
+EPILOGUE: 16,
+INTRO_CUTSCENE: 17,
+OUTRO_CUTSCENE: 18
 };
 let currentState = STATES.MENU;
 let frameCount = 0;
@@ -946,7 +954,7 @@ let screenShake = 0;
 let invincibleTimer = 0;
 let flashOpacity = 0;
 let gameRunning = false;
-let mode = 'SPACE'; // 'SPACE' or 'GROUND'
+let mode = 'SPACE';
 let pendingNextState = null;
 let qteActive = false;
 let qteSuccess = false;
@@ -955,51 +963,57 @@ let warpStars = [];
 let bossAwake = false;
 let timeScale = 1.0;
 let cinematicFrame = 0;
-let playerControlLocked = false; // Critical for cutscenes
+let playerControlLocked = false;
 let lastPlanetName = "";
 let currentPlanetType = '';
-// Grapple Logic
 let grappleActive = false;
 let grappleHealth = 100;
 let grappleMaxHealth = 100;
 let grappleStunTimer = 0;
-// Charge Beam Logic
 let chargingBeam = false;
 let chargeLevel = 0;
 const MAX_CHARGE = 100;
 const CHARGE_RATE = 1.5;
-// Void Crystal Logic
 let voidCrystalPresent = false;
 let voidCrystalAbsorbed = false;
 let weaponUpgraded = false;
-let activeWeapon = 'laser'; // 'laser' or 'void'
-// Abilities Cooldowns
+let activeWeapon = 'laser';
 let shieldCooldown = 0;
 let dodgeCooldown = 0;
 let dashCooldown = 0;
 const MAX_COOLDOWN_SHIELD = 300;
 const MAX_COOLDOWN_DODGE = 180;
 const MAX_COOLDOWN_DASH = 180;
-// Dive Logic
 let diveTimer = 0;
 let divePlanetColor = '#D2691E';
 let diveLines = [];
-// Throne Destruction Logic
 let throneDestroyTimer = 0;
 let isThroneDestroying = false;
 let throneChunks = [];
-// Exploration Logic
 let exploreTimer = 0;
-const EXPLORE_DURATION = 300; // 5 seconds at 60fps
+const EXPLORE_DURATION = 300;
 let windParticles = [];
 let vineElements = [];
 let debrisChunks = [];
 let voidRocks = [];
-// Epilogue Logic
 let epilogueTimer = 0;
-// FIXED: Increased duration from 300 (5s) / 720 (12s) to 1200 (20s)
-const EPILOGUE_DURATION = 1200; 
+const EPILOGUE_DURATION = 1200;
 let pyroxisParticles = [];
+
+// INTRO CUTSCENE VARIABLES
+let introFrame = 0;
+let introStage = 0;
+
+// OUTRO CUTSCENE VARIABLES
+let outroFrame = 0;
+let outroFlames = [];
+let outroEmbers = [];
+let outroWinds = [];
+let outroVolcanoes = [];
+let outroLavaPools = [];
+let outroPlayerX = -100;
+let outroPlayerRunCycle = 0;
+
 // Input
 const keys = {};
 let mouseX = CANVAS_W / 2;
@@ -1008,10 +1022,7 @@ let mouseDown = false;
 
 window.addEventListener('keydown', e => {
 keys[e.code] = true;
-// Prevent default scrolling for space/arrows
-if(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-    e.preventDefault();
-}
+if(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
 if(qteActive && e.code === 'Space') handleQTESuccess();
 if(grappleActive && e.code === 'Space') handleGrapplePress();
 if(e.code === 'KeyZ' && !chargingBeam && mode === 'GROUND' && !playerControlLocked) {
@@ -1045,7 +1056,12 @@ canvas.width = CANVAS_W;
 canvas.height = CANVAS_H;
 cinCanvas.width = CANVAS_W;
 cinCanvas.height = CANVAS_H;
+introCanvas.width = CANVAS_W;
+introCanvas.height = CANVAS_H;
+outroCanvas.width = CANVAS_W;
+outroCanvas.height = CANVAS_H;
 });
+
 const canvas = document.getElementById('gameCanvas');
 canvas.width = CANVAS_W;
 canvas.height = CANVAS_H;
@@ -1054,6 +1070,14 @@ const cinCanvas = document.getElementById('cinematic-canvas');
 cinCanvas.width = CANVAS_W;
 cinCanvas.height = CANVAS_H;
 const cinCtx = cinCanvas.getContext('2d');
+const introCanvas = document.getElementById('intro-canvas');
+introCanvas.width = CANVAS_W;
+introCanvas.height = CANVAS_H;
+const introCtx = introCanvas.getContext('2d');
+const outroCanvas = document.getElementById('outro-canvas');
+outroCanvas.width = CANVAS_W;
+outroCanvas.height = CANVAS_H;
+const outroCtx = outroCanvas.getContext('2d');
 
 let player = {
 x: CANVAS_W/2, y: CANVAS_H - 100,
@@ -1160,7 +1184,7 @@ throne = null;
 bossAwake = false;
 timeScale = 1.0;
 cinematicFrame = 0;
-playerControlLocked = false; // Reset lock
+playerControlLocked = false;
 grappleActive = false;
 grappleHealth = grappleMaxHealth;
 grappleStunTimer = 0;
@@ -1176,7 +1200,7 @@ player.dashTimer = 0;
 shieldCooldown = 0;
 dodgeCooldown = 0;
 dashCooldown = 0;
-exploreTimer = 0; // Reset explore timer
+exploreTimer = 0;
 updateAbilityUI();
 document.getElementById('sys-failure').style.display = 'none';
 document.getElementById('dialogue-box').style.display = 'none';
@@ -1210,29 +1234,28 @@ else if(currentState === STATES.CINEMATIC_THRONE) {
 boss = new NihilusVoidKing(CANVAS_W/2, 100);
 throne = { x: CANVAS_W/2, y: CANVAS_H/2 + 50, broken: false };
 generateSurfaceLayers('void');
-playMusic('boss3'); // FIXED TYPO HERE
+playMusic('boss3');
 lastPlanetName = "EVENT HORIZON";
-// Hide HUD for cinematic
 document.getElementById('hud').classList.remove('active');
 document.getElementById('mode-indicator').classList.remove('active');
 document.getElementById('ability-panel').classList.remove('active');
 document.getElementById('control-guide').classList.remove('active');
 document.getElementById('cinematic-overlay').style.display = 'flex';
-playerControlLocked = true; // LOCK CONTROLS FOR CINEMATIC
+playerControlLocked = true;
 }
 else if(currentState === STATES.BOSS_3_FIGHT) {
 boss = new NihilusVoidKing(CANVAS_W/2, 100);
 throne = { x: CANVAS_W/2, y: CANVAS_H/2 + 50, broken: false };
 generateSurfaceLayers('void');
-playMusic('boss3'); // Replaced startMusic
+playMusic('boss3');
 updateHUD();
-playerControlLocked = false; // Unlock for fight
+playerControlLocked = false;
 }
 else if(currentState === STATES.BOSS_3_PHASE_2) {
 boss = new VoidMan(CANVAS_W/2, 100);
 throne = null;
 generateSurfaceLayers('void');
-playMusic('boss3'); // Replaced startMusic
+playMusic('boss3');
 weaponUpgraded = true;
 activeWeapon = 'void'; 
 updateHUD();
@@ -1281,7 +1304,7 @@ document.getElementById('dialogue-box').style.display = 'block';
 setTimeout(() => {
 document.getElementById('dialogue-box').style.display = 'none';
 currentState = STATES.BOSS_3_FIGHT;
-resetLevel(true); // This will set playerControlLocked = false inside
+resetLevel(true);
 gameRunning = true;
 document.getElementById('hud').classList.add('active');
 document.getElementById('mode-indicator').classList.add('active');
@@ -1298,7 +1321,7 @@ screenShake = 50;
 flashOpacity = 1.0;
 playSound('void_stab');
 document.getElementById('weapon-unlock').classList.add('active');
-playerControlLocked = true; // Lock during animation
+playerControlLocked = true;
 
 setTimeout(() => {
 document.getElementById('weapon-unlock').classList.remove('active');
@@ -1317,18 +1340,23 @@ document.getElementById('control-guide').classList.add('active');
 }, 2000);
 }
 
+function startMissionSequence() {
+    initAudio();
+    hideAllScreens();
+    document.getElementById('hud').classList.remove('active');
+    document.getElementById('mode-indicator').classList.remove('active');
+    document.getElementById('ability-panel').classList.remove('active');
+    document.getElementById('control-guide').classList.remove('active');
+    
+    gameStateChangeTo(STATES.INTRO_CUTSCENE);
+    introFrame = 0;
+    introStage = 0;
+    introCanvas.style.display = 'block';
+    gameRunning = true;
+}
+
 function startGame() {
-initAudio();
-hideAllScreens();
-document.getElementById('hud').classList.add('active');
-document.getElementById('mode-indicator').classList.add('active');
-initBackground();
-currentState = STATES.ROCKET_1;
-gameRunning = true;
-resetLevel(false);
-score = 0;
-updateHUD();
-playMusic('space');
+    startMissionSequence();
 }
 
 function showLandingData() {
@@ -1408,8 +1436,6 @@ document.getElementById('ability-panel').classList.remove('active');
 document.getElementById('control-guide').classList.remove('active');
 document.getElementById('defeat-screen').classList.add('active');
 document.getElementById('defeat-planet-name').innerText = lastPlanetName;
-    
-// RESTORE HEALTH HERE
 player.hp = player.maxHp;
 updateHUD();
 }
@@ -1432,7 +1458,47 @@ updateHUD();
 }
 
 function gameOver() { gameRunning = false; stopMusic(); playSound('explosion'); currentState = STATES.GAMEOVER; hideAllScreens(); document.getElementById('hud').classList.remove('active'); document.getElementById('mode-indicator').classList.remove('active'); document.getElementById('ability-panel').classList.remove('active'); document.getElementById('control-guide').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); }
-function victory() { gameRunning = false; stopMusic(); currentState = STATES.VICTORY; hideAllScreens(); document.getElementById('hud').classList.remove('active'); document.getElementById('mode-indicator').classList.remove('active'); document.getElementById('ability-panel').classList.remove('active'); document.getElementById('control-guide').classList.remove('active'); document.getElementById('victory-screen').classList.add('active'); }
+function victory() { 
+    gameRunning = false; 
+    stopMusic(); 
+    currentState = STATES.OUTRO_CUTSCENE;
+    hideAllScreens();
+    document.getElementById('hud').classList.remove('active');
+    document.getElementById('mode-indicator').classList.remove('active');
+    document.getElementById('ability-panel').classList.remove('active');
+    document.getElementById('control-guide').classList.remove('active');
+    
+    // Init Outro
+    outroFrame = 0;
+    outroFlames = [];
+    outroEmbers = [];
+    outroWinds = [];
+    outroVolcanoes = [];
+    outroLavaPools = [];
+    outroPlayerX = -100;
+    outroPlayerRunCycle = 0;
+    
+    // Generate Terrain
+    for(let i=0; i<5; i++) {
+        outroVolcanoes.push({
+            x: Math.random() * CANVAS_W,
+            y: CANVAS_H - 50,
+            w: 100 + Math.random() * 150,
+            h: 150 + Math.random() * 200
+        });
+    }
+    for(let i=0; i<3; i++) {
+        outroLavaPools.push({
+            x: Math.random() * CANVAS_W,
+            y: CANVAS_H - 20,
+            w: 50 + Math.random() * 100
+        });
+    }
+    
+    outroCanvas.style.display = 'block';
+    gameRunning = true;
+    playMusic('outro');
+}
 function hideAllScreens() { ['menu-screen','transition-screen','victory-screen','gameover-screen','defeat-screen'].forEach(id => document.getElementById(id).classList.remove('active')); }
 function isBossState(s) { return s===STATES.BOSS_1||s===STATES.BOSS_2||s===STATES.BOSS_3_FIGHT||s===STATES.CINEMATIC_THRONE||s===STATES.BOSS_3_PHASE_2; }
 function getThemeColors() {
@@ -1440,6 +1506,7 @@ if(currentState===STATES.ROCKET_1||currentState===STATES.BOSS_1) return { bgTop:
 if(currentState===STATES.ROCKET_2||currentState===STATES.BOSS_2) return { bgTop:'#051005', bgBot:'#0f1a0f', ground:'#1b5e20' };
 if(currentState===STATES.BLACKHOLE_VORTEX||currentState===STATES.WARP_TRAVEL||currentState===STATES.CINEMATIC_THRONE||currentState===STATES.BOSS_3_FIGHT||currentState===STATES.BOSS_3_PHASE_2) return { bgTop:'#10051a', bgBot:'#0a001a', ground:'#1a0033' };
 if(currentState===STATES.EPILOGUE) return { bgTop:'#000', bgBot:'#1a0000', ground:'#000' };
+if(currentState===STATES.INTRO_CUTSCENE || currentState===STATES.OUTRO_CUTSCENE) return { bgTop:'#000', bgBot:'#000', ground:'#000' };
 return { bgTop:'#000', bgBot:'#111', ground:'#333' };
 }
 
@@ -1905,7 +1972,7 @@ this.isBackstabbing = false;
 this.backstabPos = {x:0, y:0};
 this.pointingUp = false;
 this.visible = true;
-this.backstabVFXTimer = 0; // NEW: For the big X visual
+this.backstabVFXTimer = 0;
 }
 update(){
 this.updateCommon();
@@ -1916,7 +1983,7 @@ this.bha=true;this.bht=0;
 this.bhx=player.x+player.w/2;
 this.bhy=player.y+player.h/2;
 this.pointingUp = true;
-playerControlLocked = true; // Lock during Black Hole pull
+playerControlLocked = true;
 playSound('warp');
 }
 if(this.bha){
@@ -1942,7 +2009,7 @@ blackHoleDebris.push({x: Math.random()*CANVAS_W, y: CANVAS_H, vx: (Math.random()
 if(this.bht>=200){
 this.bha=false;
 this.pointingUp = false;
-playerControlLocked = false; // Unlock after
+playerControlLocked = false;
 createExplosion(this.bhx,this.bhy,'#DA70D6',60);
 playSound('explosion');
 if(d>0){
@@ -1957,7 +2024,7 @@ if(this.backstabTimer > 180) {
 this.isBackstabbing = true;
 this.backstabTimer = 0;
 this.visible = false;
-this.backstabVFXTimer = 60; // Start VFX timer (1 second)
+this.backstabVFXTimer = 60;
 const pcx = player.x + player.w/2;
 const pcy = player.y + player.h/2;
 const offset = 50 * SCALE_FACTOR;
@@ -1978,7 +2045,6 @@ for(let i=0; i<20; i++) particles.push(new Particle(this.backstabPos.x, this.bac
 }, 300);
 }
 }
-// Decrement VFX timer
 if(this.backstabVFXTimer > 0) this.backstabVFXTimer--;
 }
 draw(){
@@ -2332,11 +2398,24 @@ document.getElementById('arsenal-ui').classList.add('active');
 playMusic('epilogue'); 
 }
 
+function gameStateChangeTo(newState) {
+    currentState = newState;
+}
+
 function update(){
 if(currentState === STATES.DIVE_EFFECT) {
 updateDiveEffect();
 return;
 }
+if(currentState === STATES.INTRO_CUTSCENE) {
+updateIntroCutscene();
+return;
+}
+if(currentState === STATES.OUTRO_CUTSCENE) {
+updateOutroCutscene();
+return;
+}
+
 if(!gameRunning)return;
 frameCount++;
 if(invincibleTimer>0)invincibleTimer--;
@@ -2509,6 +2588,364 @@ handleGroundCombat();
 }
 }
 
+function updateIntroCutscene() {
+    introFrame++;
+    
+    if(introStage === 0) {
+        if(introFrame > 60) {
+            introStage = 1;
+            introFrame = 0;
+        }
+    }
+    else if(introStage === 1) {
+        if(introFrame > 180) {
+            introStage = 2;
+            introFrame = 0;
+        }
+    }
+    else if(introStage === 2) {
+        if(introFrame > 180) {
+            introStage = 3;
+            introFrame = 0;
+        }
+    }
+    else if(introStage === 3) {
+        if(introFrame > 60) {
+            introCanvas.style.display = 'none';
+            gameStateChangeTo(STATES.ROCKET_1);
+            resetLevel(false);
+            gameRunning = true;
+            updateHUD();
+            playMusic('space');
+        }
+    }
+}
+
+function drawIntroCutscene() {
+    introCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    introCtx.fillStyle = '#000';
+    introCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    
+    let alpha = 1;
+    if(introStage === 0) alpha = introFrame / 60;
+    if(introStage === 3) alpha = 1 - (introFrame / 60);
+    
+    introCtx.globalAlpha = alpha;
+    
+    if(introStage === 1) {
+        introCtx.strokeStyle = '#fff';
+        introCtx.lineWidth = 3;
+        
+        const cx = CANVAS_W / 2;
+        const cy = CANVAS_H / 2;
+        
+        // Wife
+        introCtx.beginPath();
+        introCtx.arc(cx - 50, cy - 50, 20, 0, Math.PI*2);
+        introCtx.stroke();
+        introCtx.beginPath();
+        introCtx.moveTo(cx - 50, cy - 30);
+        introCtx.lineTo(cx - 50, cy + 30);
+        introCtx.moveTo(cx - 50, cy);
+        introCtx.lineTo(cx - 80, cy + 20);
+        introCtx.moveTo(cx - 50, cy);
+        introCtx.lineTo(cx - 20, cy + 20);
+        introCtx.moveTo(cx - 50, cy + 30);
+        introCtx.lineTo(cx - 70, cy + 60);
+        introCtx.moveTo(cx - 50, cy + 30);
+        introCtx.lineTo(cx - 30, cy + 60);
+        introCtx.stroke();
+        
+        // Child
+        introCtx.beginPath();
+        introCtx.arc(cx + 30, cy - 20, 15, 0, Math.PI*2);
+        introCtx.stroke();
+        introCtx.beginPath();
+        introCtx.moveTo(cx + 30, cy - 5);
+        introCtx.lineTo(cx + 30, cy + 20);
+        introCtx.moveTo(cx + 30, cy + 5);
+        introCtx.lineTo(cx + 10, cy + 15);
+        introCtx.moveTo(cx + 30, cy + 5);
+        introCtx.lineTo(cx + 50, cy + 15);
+        introCtx.moveTo(cx + 30, cy + 20);
+        introCtx.lineTo(cx + 15, cy + 40);
+        introCtx.moveTo(cx + 30, cy + 20);
+        introCtx.lineTo(cx + 45, cy + 40);
+        introCtx.stroke();
+        
+        introCtx.font = "20px 'Share Tech Mono'";
+        introCtx.fillStyle = "#0ff";
+        introCtx.textAlign = "center";
+        introCtx.fillText("\"I might possibly be the only human alive...\"", cx, cy + 100);
+    }
+    else if(introStage === 2) {
+        const cx = CANVAS_W / 2;
+        const cy = CANVAS_H / 2;
+        
+        introCtx.strokeStyle = '#fff';
+        introCtx.lineWidth = 2;
+        
+        // Syringe Barrel
+        introCtx.strokeRect(cx - 40, cy - 10, 80, 20);
+        // Plunger
+        introCtx.beginPath();
+        introCtx.moveTo(cx + 40, cy - 5);
+        introCtx.lineTo(cx + 60, cy - 5);
+        introCtx.moveTo(cx + 60, cy - 15);
+        introCtx.lineTo(cx + 60, cy + 5);
+        introCtx.stroke();
+        // Needle
+        introCtx.beginPath();
+        introCtx.moveTo(cx - 40, cy);
+        introCtx.lineTo(cx - 70, cy);
+        introCtx.stroke();
+        
+        // Liquid
+        introCtx.fillStyle = 'rgba(0, 255, 255, 0.5)';
+        introCtx.fillRect(cx - 38, cy - 8, 40, 16);
+        
+        // Label
+        introCtx.font = "bold 14px 'Share Tech Mono'";
+        introCtx.fillStyle = "#fff";
+        introCtx.textAlign = "center";
+        introCtx.fillText("LVD-11", cx, cy + 35);
+        
+        introCtx.font = "20px 'Share Tech Mono'";
+        introCtx.fillStyle = "#0ff";
+        introCtx.fillText("\"Out of everyone... I have got the chance...\"", cx, cy + 100);
+    }
+    
+    introCtx.globalAlpha = 1;
+}
+
+function updateOutroCutscene() {
+    outroFrame++;
+    outroPlayerRunCycle += 0.2;
+    
+    // Move Player Right
+    outroPlayerX += 8 * timeScale;
+    
+    // Spawn Flames
+    if(outroFrame % 15 === 0) {
+        const fx = outroPlayerX + 300 + Math.random() * 400;
+        if(fx < CANVAS_W + 100) {
+            outroFlames.push({
+                x: fx,
+                y: CANVAS_H - 50,
+                w: 40 + Math.random() * 60,
+                h: 150 + Math.random() * 200,
+                life: 1.0,
+                delay: 0
+            });
+        }
+    }
+    
+    // Spawn Winds
+    if(outroFrame % 3 === 0) {
+        outroWinds.push({
+            x: -100,
+            y: Math.random() * CANVAS_H,
+            speed: 15 + Math.random() * 10,
+            len: 50 + Math.random() * 100,
+            alpha: 0.3 + Math.random() * 0.4
+        });
+    }
+    
+    // Spawn Embers
+    if(outroFrame % 5 === 0) {
+        outroEmbers.push({
+            x: Math.random() * CANVAS_W,
+            y: CANVAS_H,
+            vx: (Math.random() - 0.5) * 2,
+            vy: -3 - Math.random() * 4,
+            life: 1.0,
+            color: Math.random() > 0.5 ? '#ff3d00' : '#ffaa00'
+        });
+    }
+    
+    // Update Flames
+    outroFlames.forEach(f => {
+        f.delay++;
+        if(f.delay > 10) f.life -= 0.02;
+    });
+    outroFlames = outroFlames.filter(f => f.life > 0);
+    
+    // Update Winds
+    outroWinds.forEach(w => {
+        w.x += w.speed;
+        if(w.x > CANVAS_W) w.x = -w.len;
+    });
+    outroWinds = outroWinds.filter(w => w.x < CANVAS_W + 100);
+    
+    // Update Embers
+    outroEmbers.forEach(e => {
+        e.x += e.vx;
+        e.y += e.vy;
+        e.life -= 0.01;
+    });
+    outroEmbers = outroEmbers.filter(e => e.life > 0);
+    
+    // End Condition
+    if(outroPlayerX > CANVAS_W + 100 || outroFrame > 400) {
+        outroCanvas.style.display = 'none';
+        document.getElementById('victory-screen').classList.add('active');
+        gameRunning = false;
+    }
+}
+
+function drawOutroCutscene() {
+    outroCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    
+    // Sky Gradient
+    const skyGrad = outroCtx.createLinearGradient(0, 0, 0, CANVAS_H);
+    skyGrad.addColorStop(0, '#1a0505');
+    skyGrad.addColorStop(1, '#330a0a');
+    outroCtx.fillStyle = skyGrad;
+    outroCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    
+    // Draw Volcanoes (Background)
+    outroCtx.fillStyle = '#220000';
+    outroVolcanoes.forEach(v => {
+        outroCtx.beginPath();
+        outroCtx.moveTo(v.x - v.w/2, v.y);
+        outroCtx.lineTo(v.x, v.y - v.h);
+        outroCtx.lineTo(v.x + v.w/2, v.y);
+        outroCtx.fill();
+        // Glow at peak
+        outroCtx.fillStyle = '#ff3d00';
+        outroCtx.shadowBlur = 20;
+        outroCtx.shadowColor = '#ff3d00';
+        outroCtx.beginPath();
+        outroCtx.arc(v.x, v.y - v.h, 10, 0, Math.PI*2);
+        outroCtx.fill();
+        outroCtx.shadowBlur = 0;
+        outroCtx.fillStyle = '#220000';
+    });
+    
+    // Ground
+    outroCtx.fillStyle = '#110000';
+    outroCtx.fillRect(0, CANVAS_H - 50, CANVAS_W, 50);
+    
+    // Lava Pools
+    outroLavaPools.forEach(l => {
+        outroCtx.fillStyle = '#ff3d00';
+        outroCtx.shadowBlur = 15;
+        outroCtx.shadowColor = '#ff3d00';
+        outroCtx.beginPath();
+        outroCtx.ellipse(l.x, l.y, l.w/2, 10, 0, 0, Math.PI*2);
+        outroCtx.fill();
+        outroCtx.shadowBlur = 0;
+    });
+    
+    // Draw Winds (Orange Streaks)
+    outroCtx.strokeStyle = '#ffaa00';
+    outroCtx.lineWidth = 2;
+    outroWinds.forEach(w => {
+        outroCtx.globalAlpha = w.alpha;
+        outroCtx.beginPath();
+        outroCtx.moveTo(w.x, w.y);
+        outroCtx.lineTo(w.x + w.len, w.y);
+        outroCtx.stroke();
+    });
+    outroCtx.globalAlpha = 1;
+    
+    // Draw Flames
+    outroFlames.forEach(f => {
+        if(f.delay < 10) return; // Delay before eruption
+        outroCtx.globalAlpha = f.life;
+        outroCtx.fillStyle = '#ff3d00';
+        outroCtx.shadowBlur = 30;
+        outroCtx.shadowColor = '#ff3d00';
+        outroCtx.beginPath();
+        outroCtx.moveTo(f.x, f.y);
+        outroCtx.quadraticCurveTo(f.x + f.w/2, f.y - f.h, f.x + f.w, f.y);
+        outroCtx.fill();
+        outroCtx.shadowBlur = 0;
+    });
+    outroCtx.globalAlpha = 1;
+    
+    // Draw Embers
+    outroEmbers.forEach(e => {
+        outroCtx.globalAlpha = e.life;
+        outroCtx.fillStyle = e.color;
+        outroCtx.beginPath();
+        outroCtx.arc(e.x, e.y, 2, 0, Math.PI*2);
+        outroCtx.fill();
+    });
+    outroCtx.globalAlpha = 1;
+    
+    // Draw Player (Astronaut Running)
+    outroCtx.save();
+    outroCtx.translate(outroPlayerX, CANVAS_H - 100);
+    
+    // Shadow
+    outroCtx.fillStyle = 'rgba(0,0,0,0.5)';
+    outroCtx.beginPath();
+    outroCtx.ellipse(0, 40, 20, 5, 0, 0, Math.PI*2);
+    outroCtx.fill();
+    
+    // Body Suit
+    outroCtx.fillStyle = '#ddd';
+    outroCtx.strokeStyle = '#333';
+    outroCtx.lineWidth = 2;
+    
+    // Torso
+    outroCtx.fillRect(-15, -20, 30, 40);
+    outroCtx.strokeRect(-15, -20, 30, 40);
+    
+    // Helmet
+    outroCtx.beginPath();
+    outroCtx.arc(0, -30, 15, 0, Math.PI*2);
+    outroCtx.fillStyle = '#eee';
+    outroCtx.fill();
+    outroCtx.stroke();
+    // Visor
+    outroCtx.fillStyle = '#00e5ff';
+    outroCtx.beginPath();
+    outroCtx.arc(5, -30, 8, -Math.PI/2, Math.PI/2);
+    outroCtx.fill();
+    
+    // Legs Animation
+    const legSwing = Math.sin(outroPlayerRunCycle) * 20;
+    outroCtx.strokeStyle = '#ddd';
+    outroCtx.lineWidth = 8;
+    outroCtx.lineCap = 'round';
+    
+    // Left Leg
+    outroCtx.beginPath();
+    outroCtx.moveTo(-5, 20);
+    outroCtx.lineTo(-5 - legSwing/2, 40);
+    outroCtx.stroke();
+    
+    // Right Leg
+    outroCtx.beginPath();
+    outroCtx.moveTo(5, 20);
+    outroCtx.lineTo(5 + legSwing/2, 40);
+    outroCtx.stroke();
+    
+    // Arms Animation
+    const armSwing = Math.cos(outroPlayerRunCycle) * 15;
+    outroCtx.lineWidth = 6;
+    
+    // Left Arm
+    outroCtx.beginPath();
+    outroCtx.moveTo(-15, -10);
+    outroCtx.lineTo(-25 - armSwing, 10);
+    outroCtx.stroke();
+    
+    // Right Arm
+    outroCtx.beginPath();
+    outroCtx.moveTo(15, -10);
+    outroCtx.lineTo(25 + armSwing, 10);
+    outroCtx.stroke();
+    
+    // Backpack
+    outroCtx.fillStyle = '#555';
+    outroCtx.fillRect(-20, -15, 10, 25);
+    
+    outroCtx.restore();
+}
+
 function updateEpilogue() {
 epilogueTimer++;
 player.y = CANVAS_H/2 + Math.sin(frameCount * 0.05) * 20;
@@ -2537,7 +2974,6 @@ victory();
 }
 
 function updateExploration() {
-// Allow movement during exploration
 if(!playerControlLocked && grappleStunTimer <= 0 && !player.dashing) {
 if(keys['KeyW']||keys['ArrowUp']) player.y -= PLAYER_SPEED_GROUND_BASE * SCALE_FACTOR * timeScale;
 if(keys['KeyS']||keys['ArrowDown']) player.y += PLAYER_SPEED_GROUND_BASE * SCALE_FACTOR * timeScale;
@@ -2550,15 +2986,12 @@ const pcx = player.x + player.w/2;
 const pcy = player.y + player.h/2;
 player.angle = Math.atan2(mouseY - pcy, mouseX - pcx);
 
-// Optional: Allow shooting in exploration? Usually no, but let's keep it simple. No shooting.
-
 if(currentPlanetType === 'sand') {
 windParticles.forEach(wp => {
 wp.x -= wp.speed * timeScale;
 if(wp.x < -wp.length) wp.x = CANVAS_W;
 });
 } else if (currentPlanetType === 'nature') {
-// Vines sway handled in draw
 } else if (currentPlanetType === 'void') {
 debrisChunks.forEach(dc => {
 dc.x += dc.vx * timeScale;
@@ -2901,7 +3334,7 @@ function drawBackground(){
 const th=getThemeColors();
 const gd=ctx.createLinearGradient(0,0,0,CANVAS_H);gd.addColorStop(0,th.bgTop);gd.addColorStop(1,th.bgBot);
 ctx.fillStyle=gd;ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
-if(!isBossState(currentState) && currentState !== STATES.EPILOGUE && currentState !== STATES.EXPLORE_MODE) {
+if(!isBossState(currentState) && currentState !== STATES.EPILOGUE && currentState !== STATES.EXPLORE_MODE && currentState !== STATES.INTRO_CUTSCENE && currentState !== STATES.OUTRO_CUTSCENE) {
 nebulae.forEach(n=>{
 const rg=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r);
 rg.addColorStop(0,n.color);rg.addColorStop(1,'transparent');
@@ -3297,7 +3730,7 @@ setTimeout(() => {
 voidCrystalPresent = true;
 document.getElementById('pickup-prompt').style.display = 'block';
 gameRunning = true;
-playerControlLocked = false; // Unlock for pickup
+playerControlLocked = false;
 }, 1000);
 }
 }
@@ -3370,6 +3803,16 @@ cinCtx.restore();
 
 function draw(){
 ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
+
+if(currentState === STATES.INTRO_CUTSCENE) {
+    drawIntroCutscene();
+    return;
+}
+if(currentState === STATES.OUTRO_CUTSCENE) {
+    drawOutroCutscene();
+    return;
+}
+
 if(currentState === STATES.DIVE_EFFECT) {
 drawDiveEffect();
 return;
@@ -3377,7 +3820,7 @@ return;
 ctx.save();
 if(screenShake>0)ctx.translate((Math.random()-0.5)*screenShake,(Math.random()-0.5)*screenShake);
 drawBackground();
-if(currentState!==STATES.MENU&&currentState!==STATES.TRANSITION&&currentState!==STATES.VICTORY&&currentState!==STATES.GAMEOVER&&currentState!==STATES.DEFEAT_SCREEN){
+if(currentState!==STATES.MENU&&currentState!==STATES.TRANSITION&&currentState!==STATES.VICTORY&&currentState!==STATES.GAMEOVER&&currentState!==STATES.DEFEAT_SCREEN&&currentState!==STATES.INTRO_CUTSCENE&&currentState!==STATES.OUTRO_CUTSCENE){
 player.trail.forEach(t=>{ctx.fillStyle=`rgba(0,255,255,${t.l})`;ctx.beginPath();ctx.arc(t.x,t.y,5*t.l*SCALE_FACTOR,0,Math.PI*2);ctx.fill();});
 enemies.forEach(e=>e.draw());
 powerups.forEach(p=>p.draw());
@@ -3398,16 +3841,14 @@ ctx.restore();
 particles.forEach(p=>p.draw());
 drawPlayer();
 
-// DRAW BACKSTAB VFX IF ACTIVE
 if(boss && boss instanceof NihilusVoidKing && boss.backstabVFXTimer > 0) {
 ctx.save();
-ctx.globalAlpha = boss.backstabVFXTimer / 60; // Fade out over time
+ctx.globalAlpha = boss.backstabVFXTimer / 60;
 ctx.strokeStyle = '#FFFFFF';
 ctx.lineWidth = 10 * SCALE_FACTOR;
 ctx.shadowBlur = 20;
 ctx.shadowColor = '#DA70D6';
 ctx.beginPath();
-// Draw Big X covering most of the screen
 const pad = 100;
 ctx.moveTo(pad, pad);
 ctx.lineTo(CANVAS_W - pad, CANVAS_H - pad);
@@ -3489,7 +3930,6 @@ ctx.fillText("DESCENDING...", CANVAS_W/2, CANVAS_H/2);
 }
 
 function finishDive() {
-// Transition to Explore Mode instead of immediate Boss
 currentState = STATES.EXPLORE_MODE;
 gameRunning = true;
 exploreTimer = 0;
@@ -3499,9 +3939,7 @@ player.y = CANVAS_H - 150;
 enemies = [];
 powerups = [];
 approachingPlanet = null;
-playerControlLocked = false; // Ensure controls are ON for exploration
-    
-// RESTORE HEALTH ON LANDINGS TOO
+playerControlLocked = false;
 player.hp = player.maxHp; 
 
 if(window.pendingNextState === STATES.BOSS_1) {
@@ -3515,7 +3953,6 @@ lastPlanetName = "BIOSPHERE ZONE";
 else if(window.pendingNextState === STATES.CINEMATIC_THRONE) {
 generateSurfaceLayers('void');
 lastPlanetName = "EVENT HORIZON";
-// For Void Island, we skip exploration and go straight to cinematic
 currentState = STATES.CINEMATIC_THRONE;
 resetLevel(true);
 gameRunning = true;
