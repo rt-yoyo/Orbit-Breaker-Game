@@ -10235,6 +10235,1089 @@ const LAND_EVENT = [
 })();
 
 /* ===== END v3.4 KILL VOID MAN CIRCLES ===== */
+/* ===== v3.7 WARP + THRONE CINEMATIC PATCH ===== */
+
+(function () {
+    // Duplicate-safe
+    if (window.__v37WarpThroneApplied) return;
+    window.__v37WarpThroneApplied = true;
+
+    // ------------------------------------------------------------
+    // CSS
+    // ------------------------------------------------------------
+    var v37Style = document.createElement("style");
+    v37Style.id = "v37-warp-throne-css";
+    v37Style.textContent = `
+        #v37-cutscene-canvas {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 150;
+            display: none;
+            pointer-events: none;
+            background: #000;
+        }
+    `;
+    document.head.appendChild(v37Style);
+
+    // ------------------------------------------------------------
+    // CUTSCENE CANVAS
+    // ------------------------------------------------------------
+    var v37Canvas = document.createElement("canvas");
+    v37Canvas.id = "v37-cutscene-canvas";
+    document.body.appendChild(v37Canvas);
+
+    var v37Ctx = v37Canvas.getContext("2d");
+
+    function resizeV37Canvas() {
+        v37Canvas.width = window.innerWidth;
+        v37Canvas.height = window.innerHeight;
+    }
+
+    resizeV37Canvas();
+    window.addEventListener("resize", resizeV37Canvas);
+
+    // ------------------------------------------------------------
+    // STATE
+    // ------------------------------------------------------------
+    var warpActive = false;
+    var warpFrame = 0;
+    var warpDuration = 860; // ~14 seconds at 60fps
+    var warpCallback = null;
+
+    var throneActive = false;
+    var throneFrame = 0;
+    var throneDuration = 620; // ~10 seconds at 60fps
+    var throneCallback = null;
+
+    var pendingThroneCinematic = false;
+
+    function showV37Canvas() {
+        v37Canvas.style.display = "block";
+    }
+
+    function hideV37Canvas() {
+        v37Canvas.style.display = "none";
+    }
+
+    function clearV37GameFX() {
+        if (typeof flashOpacity !== "undefined") flashOpacity = 0;
+        if (typeof screenShake !== "undefined") screenShake = 0;
+    }
+
+    function startWarpCinematic(onDone) {
+        if (warpActive || throneActive) {
+            if (onDone) onDone();
+            return;
+        }
+
+        warpActive = true;
+        warpFrame = 0;
+        warpCallback = onDone || null;
+
+        showV37Canvas();
+        clearV37GameFX();
+
+        if (typeof playerControlLocked !== "undefined") playerControlLocked = true;
+        if (typeof gameRunning !== "undefined") gameRunning = false;
+    }
+
+    function startThroneCinematic(onDone) {
+        if (warpActive || throneActive) {
+            if (onDone) onDone();
+            return;
+        }
+
+        throneActive = true;
+        throneFrame = 0;
+        throneCallback = onDone || null;
+
+        showV37Canvas();
+        clearV37GameFX();
+
+        if (typeof playerControlLocked !== "undefined") playerControlLocked = true;
+        if (typeof gameRunning !== "undefined") gameRunning = false;
+    }
+
+    function finishWarpCinematic() {
+        warpActive = false;
+        hideV37Canvas();
+
+        var cb = warpCallback;
+        warpCallback = null;
+
+        if (cb) cb();
+    }
+
+    function finishThroneCinematic() {
+        throneActive = false;
+        hideV37Canvas();
+
+        var cb = throneCallback;
+        throneCallback = null;
+
+        if (cb) cb();
+    }
+
+    // Skip with ENTER
+    window.addEventListener("keydown", function (e) {
+        if (e.code === "Enter" || e.key === "Enter") {
+            if (warpActive) warpFrame = warpDuration;
+            if (throneActive) throneFrame = throneDuration;
+        }
+    });
+
+    // ------------------------------------------------------------
+    // DRAW HELPERS
+    // ------------------------------------------------------------
+    function fract(v) {
+        return v - Math.floor(v);
+    }
+
+    function rand(seed) {
+        return fract(Math.sin(seed * 12.9898 + 78.233) * 43758.5453);
+    }
+
+    function drawV37TypedLine(vc, text, x, y, progress, font, color, glow) {
+        var chars = Math.max(0, Math.min(text.length, Math.floor(progress * text.length)));
+        var shown = text.substring(0, chars);
+
+        vc.save();
+        vc.font = font;
+        vc.textAlign = "center";
+        vc.textBaseline = "middle";
+        vc.fillStyle = color;
+        vc.shadowBlur = glow || 14;
+        vc.shadowColor = color;
+        vc.fillText(shown, x, y);
+
+        if (chars < text.length && Math.floor((progress * 100)) % 2 === 0) {
+            var m = vc.measureText(shown);
+            vc.fillRect(x + m.width / 2 + 6, y - 10, 2, 20);
+        }
+
+        vc.restore();
+    }
+
+    function drawV37Subtitles(vc, lines, frame, W, H) {
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+
+            if (frame >= line.start && frame <= line.end) {
+                var local = (frame - line.start) / Math.max(1, line.end - line.start);
+                var typeProgress = Math.min(1, local / 0.72);
+
+                vc.save();
+                vc.font = "bold " + Math.max(13, W * 0.011) + "px 'Share Tech Mono', monospace";
+                vc.textAlign = "center";
+                vc.fillStyle = line.speakerColor || "#ffb300";
+                vc.shadowBlur = 12;
+                vc.shadowColor = line.speakerColor || "#ffb300";
+                vc.fillText(line.speaker || "", W / 2, H * 0.80);
+                vc.restore();
+
+                drawV37TypedLine(
+                    vc,
+                    line.text,
+                    W / 2,
+                    H * 0.86,
+                    typeProgress,
+                    Math.max(18, W * 0.022) + "px 'Rajdhani', sans-serif",
+                    line.textColor || "#eaf6ff",
+                    18
+                );
+
+                break;
+            }
+        }
+    }
+
+    function drawV37Letterbox(vc, W, H) {
+        vc.fillStyle = "#000";
+        vc.fillRect(0, 0, W, H * 0.075);
+        vc.fillRect(0, H * 0.925, W, H * 0.075);
+    }
+
+    function drawV37SkipHint(vc, W, H) {
+        vc.save();
+        vc.font = Math.max(11, W * 0.008) + "px 'Share Tech Mono', monospace";
+        vc.textAlign = "right";
+        vc.fillStyle = "rgba(255,255,255,0.32)";
+        vc.fillText("PRESS ENTER TO SKIP", W - 28, H * 0.905);
+        vc.restore();
+    }
+
+    // ------------------------------------------------------------
+    // WARP TRAVEL CINEMATIC
+    // ------------------------------------------------------------
+    var warpLines = [
+        {
+            start: 70,
+            end: 170,
+            speaker: "SYSTEM",
+            speakerColor: "#ff3d00",
+            text: "Warp corridor unstable."
+        },
+        {
+            start: 170,
+            end: 270,
+            speaker: "PILOT",
+            speakerColor: "#00e5ff",
+            text: "LVD-11... it is pulling me forward."
+        },
+        {
+            start: 270,
+            end: 385,
+            speaker: "NAVIGATION",
+            speakerColor: "#ffb300",
+            text: "Mass shadows ahead. Kaelos. Biosphere. Unknown."
+        },
+        {
+            start: 385,
+            end: 500,
+            speaker: "UNKNOWN SIGNAL",
+            speakerColor: "#ea80fc",
+            text: "The silence is not empty. It is fastened."
+        },
+        {
+            start: 500,
+            end: 625,
+            speaker: "PILOT",
+            speakerColor: "#00e5ff",
+            text: "Threads... planets tied to something ancient."
+        },
+        {
+            start: 625,
+            end: 720,
+            speaker: "SYSTEM",
+            speakerColor: "#ff3d00",
+            text: "Anchor resonance detected."
+        },
+        {
+            start: 720,
+            end: 805,
+            speaker: "PILOT",
+            speakerColor: "#00e5ff",
+            text: "Hold. Just hold."
+        },
+        {
+            start: 805,
+            end: 860,
+            speaker: "",
+            speakerColor: "#ffffff",
+            textColor: "#ea80fc",
+            text: "EVENT HORIZON"
+        }
+    ];
+
+    function drawWarpPlanetOrb(vc, x, y, r, type, alpha) {
+        vc.save();
+        vc.globalAlpha = alpha;
+
+        var grad = vc.createRadialGradient(x - r * 0.25, y - r * 0.25, r * 0.05, x, y, r);
+
+        if (type === "sand") {
+            grad.addColorStop(0, "#ffe0b3");
+            grad.addColorStop(0.45, "#d7a86f");
+            grad.addColorStop(1, "#2a160f");
+        } else if (type === "nature") {
+            grad.addColorStop(0, "#b7ffd1");
+            grad.addColorStop(0.45, "#42d66f");
+            grad.addColorStop(1, "#03140a");
+        } else if (type === "void") {
+            grad.addColorStop(0, "#efc7ff");
+            grad.addColorStop(0.45, "#b86cff");
+            grad.addColorStop(1, "#080012");
+        } else {
+            grad.addColorStop(0, "#ffd1a8");
+            grad.addColorStop(0.45, "#ff6a00");
+            grad.addColorStop(1, "#1a0500");
+        }
+
+        vc.fillStyle = grad;
+        vc.beginPath();
+        vc.arc(x, y, r, 0, Math.PI * 2);
+        vc.fill();
+
+        vc.strokeStyle = type === "pyro" ? "rgba(255,120,0,0.65)" : "rgba(255,255,255,0.28)";
+        vc.lineWidth = 2;
+        vc.shadowBlur = 18;
+        vc.shadowColor = type === "pyro" ? "#ff6a00" : "#ffffff";
+        vc.stroke();
+
+        vc.restore();
+    }
+
+    function drawWarpThread(vc, x1, y1, x2, y2, color, alpha, wave) {
+        vc.save();
+        vc.globalAlpha = alpha;
+        vc.strokeStyle = color;
+        vc.lineWidth = 2;
+        vc.shadowBlur = 14;
+        vc.shadowColor = color;
+
+        vc.beginPath();
+        vc.moveTo(x1, y1);
+
+        var steps = 18;
+        for (var i = 1; i <= steps; i++) {
+            var t = i / steps;
+            var mx = x1 + (x2 - x1) * t;
+            var my = y1 + (y2 - y1) * t;
+            my += Math.sin(t * 8 + wave) * 10;
+            vc.lineTo(mx, my);
+        }
+
+        vc.stroke();
+        vc.restore();
+    }
+
+    function drawWarpThroneSilhouette(vc, cx, cy, scale, alpha, f) {
+        vc.save();
+        vc.translate(cx, cy);
+        vc.scale(scale, scale);
+        vc.globalAlpha = alpha;
+
+        vc.fillStyle = "#12001f";
+        vc.strokeStyle = "#DA70D6";
+        vc.lineWidth = 4;
+        vc.shadowBlur = 28;
+        vc.shadowColor = "#DA70D6";
+
+        vc.beginPath();
+        vc.moveTo(0, -150);
+        vc.lineTo(70, -35);
+        vc.lineTo(45, -10);
+        vc.lineTo(-45, -10);
+        vc.lineTo(-70, -35);
+        vc.closePath();
+        vc.fill();
+        vc.stroke();
+
+        vc.fillRect(-110, -10, 220, 45);
+        vc.strokeRect(-110, -10, 220, 45);
+
+        vc.fillRect(-145, -70, 35, 55);
+        vc.fillRect(110, -70, 35, 55);
+
+        // Pulsing anchor core
+        var pulse = 0.45 + Math.sin(f * 0.12) * 0.25;
+        vc.globalAlpha = alpha * pulse;
+        vc.fillStyle = "#ffffff";
+        vc.beginPath();
+        vc.arc(0, 10, 18, 0, Math.PI * 2);
+        vc.fill();
+
+        vc.restore();
+    }
+
+    function drawWarpCinematic() {
+        var vc = v37Ctx;
+        var W = v37Canvas.width;
+        var H = v37Canvas.height;
+        var cx = W / 2;
+        var cy = H / 2;
+        var f = warpFrame;
+
+        vc.setTransform(1, 0, 0, 1, 0, 0);
+        vc.fillStyle = "#000000";
+        vc.fillRect(0, 0, W, H);
+
+        var shake = 0;
+        if (f > 120 && f < 760) {
+            shake = Math.sin(f * 0.55) * (1.5 + Math.min(20, f * 0.025));
+        }
+
+        vc.save();
+        vc.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+        // Deep space base
+        var bg = vc.createRadialGradient(cx, cy, 10, cx, cy, Math.max(W, H) * 0.8);
+        bg.addColorStop(0, "rgba(40,0,70,0.42)");
+        bg.addColorStop(0.35, "rgba(8,0,18,0.88)");
+        bg.addColorStop(1, "#000000");
+        vc.fillStyle = bg;
+        vc.fillRect(0, 0, W, H);
+
+        // Warp tunnel streaks
+        var maxR = Math.hypot(W, H) * 0.78;
+        var speed = 1.2 + f * 0.045;
+
+        for (var i = 0; i < 320; i++) {
+            var a = i * 2.39996 + f * 0.0012;
+            var d = (i * 91.7 + f * speed * (8 + i % 7)) % maxR;
+            var d2 = d + 12 + f * 0.08 + (i % 5) * 4;
+
+            var x1 = cx + Math.cos(a) * d;
+            var y1 = cy + Math.sin(a) * d * 0.76;
+            var x2 = cx + Math.cos(a) * d2;
+            var y2 = cy + Math.sin(a) * d2 * 0.76;
+
+            var color = "#ffffff";
+            if (i % 11 === 0) color = "#DA70D6";
+            else if (i % 17 === 0) color = "#00e5ff";
+            else if (i % 23 === 0) color = "#ffb300";
+
+            vc.globalAlpha = Math.max(0, 0.12 + (d / maxR) * 0.55);
+            vc.strokeStyle = color;
+            vc.lineWidth = Math.max(1, (d / maxR) * 4);
+            vc.shadowBlur = 10;
+            vc.shadowColor = color;
+
+            vc.beginPath();
+            vc.moveTo(x1, y1);
+            vc.lineTo(x2, y2);
+            vc.stroke();
+        }
+
+        vc.globalAlpha = 1;
+        vc.shadowBlur = 0;
+
+        // Central warp core
+        var coreR = 35 + f * 0.28;
+        var coreGrad = vc.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+        coreGrad.addColorStop(0, "rgba(255,255,255,0.95)");
+        coreGrad.addColorStop(0.25, "rgba(0,229,255,0.55)");
+        coreGrad.addColorStop(0.55, "rgba(218,112,214,0.35)");
+        coreGrad.addColorStop(1, "rgba(0,0,0,0)");
+
+        vc.fillStyle = coreGrad;
+        vc.beginPath();
+        vc.arc(cx, cy, coreR, 0, Math.PI * 2);
+        vc.fill();
+
+        // Planet orbs flying through warp
+        var planets = [
+            { type: "sand", start: 180, ox: -420, oy: -120, r: 58 },
+            { type: "nature", start: 245, ox: 430, oy: -80, r: 62 },
+            { type: "void", start: 315, ox: -360, oy: 190, r: 54 },
+            { type: "pyro", start: 390, ox: 390, oy: 220, r: 50 }
+        ];
+
+        for (var p = 0; p < planets.length; p++) {
+            var pl = planets[p];
+            if (f < pl.start) continue;
+
+            var prog = Math.min(1, (f - pl.start) / 260);
+            var px = cx + pl.ox * (1 - prog * 0.72);
+            var py = cy + pl.oy * (1 - prog * 0.72);
+            var pr = pl.r * (0.55 + prog * 0.65) * Math.min(2, W / 1200);
+            var alpha = Math.sin(prog * Math.PI) * 0.95;
+
+            drawWarpPlanetOrb(vc, px, py, pr, pl.type, alpha);
+
+            var threadColor = pl.type === "pyro" ? "#ff6a00" :
+                              pl.type === "void" ? "#DA70D6" :
+                              pl.type === "nature" ? "#69f0ae" : "#ffb74d";
+
+            drawWarpThread(
+                vc,
+                px,
+                py,
+                cx,
+                cy,
+                threadColor,
+                alpha * 0.55,
+                f * 0.05 + p
+            );
+        }
+
+        // LVD-11 syringe ghost
+        if (f > 260 && f < 620) {
+            var lp = Math.min(1, (f - 260) / 180);
+            var la = Math.sin(lp * Math.PI) * 0.65;
+
+            vc.save();
+            vc.translate(cx + Math.sin(f * 0.03) * 40, cy - 120);
+            vc.rotate(-0.35 + Math.sin(f * 0.02) * 0.08);
+            vc.globalAlpha = la;
+
+            vc.strokeStyle = "#00e5ff";
+            vc.lineWidth = 3;
+            vc.shadowBlur = 22;
+            vc.shadowColor = "#00e5ff";
+            vc.strokeRect(-70, -16, 140, 32);
+
+            vc.fillStyle = "rgba(0,229,255,0.35)";
+            vc.fillRect(-64, -10, 70, 20);
+
+            vc.beginPath();
+            vc.moveTo(70, -8);
+            vc.lineTo(105, -8);
+            vc.moveTo(105, -20);
+            vc.lineTo(105, 20);
+            vc.moveTo(-70, 0);
+            vc.lineTo(-115, 0);
+            vc.stroke();
+
+            vc.font = "bold 18px 'Share Tech Mono', monospace";
+            vc.fillStyle = "#ffffff";
+            vc.textAlign = "center";
+            vc.fillText("LVD-11", 0, 42);
+
+            vc.restore();
+        }
+
+        // Throne silhouette emerges
+        if (f > 420) {
+            var tp = Math.min(1, (f - 420) / 220);
+            var throneScale = Math.min(2, W / 1100) * (0.75 + tp * 0.45);
+            drawWarpThroneSilhouette(vc, cx, cy + 40, throneScale, tp * 0.88, f);
+        }
+
+        // Reality glitch slices
+        if (f > 520 && f < 790) {
+            for (var g = 0; g < 22; g++) {
+                var gy = rand(g + f * 0.01) * H;
+                var gh = 3 + rand(g * 3.7) * 18;
+                var gx = (rand(g * 7.1 + f * 0.02) - 0.5) * 90;
+
+                vc.globalAlpha = 0.08 + rand(g + f * 0.03) * 0.12;
+                vc.fillStyle = g % 3 === 0 ? "#DA70D6" : g % 3 === 1 ? "#00e5ff" : "#ffffff";
+                vc.fillRect(gx, gy, W, gh);
+            }
+            vc.globalAlpha = 1;
+        }
+
+        // Red danger vignette
+        if (f > 90 && f < 740) {
+            var danger = Math.sin(f * 0.06) * 0.5 + 0.5;
+            var vig = vc.createRadialGradient(cx, cy, H * 0.18, cx, cy, Math.max(W, H) * 0.78);
+            vig.addColorStop(0, "rgba(0,0,0,0)");
+            vig.addColorStop(0.65, "rgba(0,0,0,0.35)");
+            vig.addColorStop(1, "rgba(255,20,0," + (0.12 + danger * 0.18) + ")");
+            vc.fillStyle = vig;
+            vc.fillRect(0, 0, W, H);
+        }
+
+        vc.restore();
+
+        drawV37Letterbox(vc, W, H);
+        drawV37Subtitles(vc, warpLines, f, W, H);
+        drawV37SkipHint(vc, W, H);
+    }
+
+    // ------------------------------------------------------------
+    // THRONE DISINTEGRATION CINEMATIC
+    // ------------------------------------------------------------
+    var throneLines = [
+        {
+            start: 35,
+            end: 145,
+            speaker: "PILOT",
+            speakerColor: "#00e5ff",
+            text: "The throne... it was holding something shut."
+        },
+        {
+            start: 145,
+            end: 260,
+            speaker: "NAVIGATION",
+            speakerColor: "#ffb300",
+            text: "Anchor failure. Distant masses destabilizing."
+        },
+        {
+            start: 260,
+            end: 370,
+            speaker: "PILOT",
+            speakerColor: "#00e5ff",
+            text: "How many worlds are tied to this?"
+        },
+        {
+            start: 370,
+            end: 480,
+            speaker: "NAVIGATION",
+            speakerColor: "#ffb300",
+            text: "Unknown. One signature is burning."
+        },
+        {
+            start: 480,
+            end: 565,
+            speaker: "SYSTEM",
+            speakerColor: "#ff3d00",
+            text: "Void crystal exposed."
+        },
+        {
+            start: 565,
+            end: 620,
+            speaker: "PILOT",
+            speakerColor: "#ea80fc",
+            text: "Then the next chain is already moving."
+        }
+    ];
+
+    function drawThroneBase(vc, cx, cy, scale, alpha, crackProgress, f) {
+        vc.save();
+        vc.translate(cx, cy);
+        vc.scale(scale, scale);
+        vc.globalAlpha = alpha;
+
+        // Floor glow
+        var floor = vc.createRadialGradient(0, 80, 10, 0, 80, 360);
+        floor.addColorStop(0, "rgba(218,112,214,0.34)");
+        floor.addColorStop(0.45, "rgba(74,20,140,0.18)");
+        floor.addColorStop(1, "rgba(0,0,0,0)");
+        vc.fillStyle = floor;
+        vc.beginPath();
+        vc.ellipse(0, 80, 360, 75, 0, 0, Math.PI * 2);
+        vc.fill();
+
+        // Throne body
+        vc.fillStyle = "#12001f";
+        vc.strokeStyle = "#DA70D6";
+        vc.lineWidth = 4;
+        vc.shadowBlur = 24;
+        vc.shadowColor = "#DA70D6";
+
+        vc.beginPath();
+        vc.moveTo(0, -210);
+        vc.lineTo(82, -45);
+        vc.lineTo(52, -12);
+        vc.lineTo(-52, -12);
+        vc.lineTo(-82, -45);
+        vc.closePath();
+        vc.fill();
+        vc.stroke();
+
+        vc.fillRect(-125, -12, 250, 55);
+        vc.strokeRect(-125, -12, 250, 55);
+
+        vc.fillRect(-165, -82, 40, 62);
+        vc.fillRect(125, -82, 40, 62);
+
+        // Cracks
+        vc.strokeStyle = "rgba(255,255,255," + (0.35 + crackProgress * 0.55) + ")";
+        vc.lineWidth = 3;
+        vc.shadowBlur = 18;
+        vc.shadowColor = "#ffffff";
+
+        for (var i = 0; i < 16; i++) {
+            var a = i * 0.41 + Math.sin(f * 0.02 + i) * 0.08;
+            var len = (55 + i * 12) * crackProgress;
+
+            vc.beginPath();
+            vc.moveTo(0, 10);
+            vc.lineTo(Math.cos(a) * len, Math.sin(a) * len * 0.65 + 10);
+            vc.stroke();
+        }
+
+        vc.restore();
+    }
+
+    function drawThroneChunk(vc, chunk, progress, alpha) {
+        vc.save();
+        vc.globalAlpha = alpha;
+        vc.translate(chunk.x, chunk.y);
+        vc.rotate(chunk.rot + progress * chunk.spin);
+
+        var size = chunk.size * (1 - progress * 0.35);
+
+        vc.fillStyle = "#1b0028";
+        vc.strokeStyle = "#DA70D6";
+        vc.lineWidth = 2;
+        vc.shadowBlur = 16;
+        vc.shadowColor = "#DA70D6";
+
+        vc.beginPath();
+        vc.moveTo(-size, -size * 0.55);
+        vc.lineTo(size * 0.75, -size);
+        vc.lineTo(size, size * 0.45);
+        vc.lineTo(-size * 0.45, size);
+        vc.closePath();
+        vc.fill();
+        vc.stroke();
+
+        vc.fillStyle = "rgba(255,255,255," + (0.25 + Math.sin(progress * 10 + chunk.seed) * 0.2) + ")";
+        vc.beginPath();
+        vc.arc(0, 0, size * 0.22, 0, Math.PI * 2);
+        vc.fill();
+
+        vc.restore();
+    }
+
+    function drawThroneAnchorThread(vc, x1, y1, x2, y2, snapProgress, color, f) {
+        vc.save();
+
+        var alpha = 1 - snapProgress;
+        if (alpha <= 0) {
+            // Broken thread sparks
+            var bx = x1 + (x2 - x1) * 0.55;
+            var by = y1 + (y2 - y1) * 0.55;
+
+            vc.globalAlpha = Math.max(0, 0.65 - (snapProgress - 1) * 1.2);
+            vc.strokeStyle = color;
+            vc.lineWidth = 2;
+            vc.shadowBlur = 18;
+            vc.shadowColor = color;
+
+            for (var s = 0; s < 8; s++) {
+                var a = s * 0.78 + f * 0.12;
+                var d = 8 + snapProgress * 55;
+                vc.beginPath();
+                vc.moveTo(bx, by);
+                vc.lineTo(bx + Math.cos(a) * d, by + Math.sin(a) * d);
+                vc.stroke();
+            }
+
+            vc.restore();
+            return;
+        }
+
+        vc.globalAlpha = alpha * 0.82;
+        vc.strokeStyle = color;
+        vc.lineWidth = 3;
+        vc.shadowBlur = 18;
+        vc.shadowColor = color;
+
+        vc.beginPath();
+        vc.moveTo(x1, y1);
+
+        var steps = 22;
+        for (var i = 1; i <= steps; i++) {
+            var t = i / steps;
+            var mx = x1 + (x2 - x1) * t;
+            var my = y1 + (y2 - y1) * t;
+            my += Math.sin(t * 10 + f * 0.06) * 14 * alpha;
+            vc.lineTo(mx, my);
+        }
+
+        vc.stroke();
+        vc.restore();
+    }
+
+    function drawThronePlanetNode(vc, x, y, r, type, pulse, alpha) {
+        vc.save();
+        vc.globalAlpha = alpha;
+
+        var grad = vc.createRadialGradient(x - r * 0.25, y - r * 0.25, r * 0.05, x, y, r);
+
+        if (type === "sand") {
+            grad.addColorStop(0, "#ffe0b3");
+            grad.addColorStop(0.45, "#d7a86f");
+            grad.addColorStop(1, "#2a160f");
+        } else if (type === "nature") {
+            grad.addColorStop(0, "#b7ffd1");
+            grad.addColorStop(0.45, "#42d66f");
+            grad.addColorStop(1, "#03140a");
+        } else if (type === "void") {
+            grad.addColorStop(0, "#efc7ff");
+            grad.addColorStop(0.45, "#b86cff");
+            grad.addColorStop(1, "#080012");
+        } else {
+            grad.addColorStop(0, "#ffd1a8");
+            grad.addColorStop(0.45, "#ff6a00");
+            grad.addColorStop(1, "#1a0500");
+        }
+
+        vc.fillStyle = grad;
+        vc.beginPath();
+        vc.arc(x, y, r * (1 + pulse * 0.08), 0, Math.PI * 2);
+        vc.fill();
+
+        vc.strokeStyle = type === "pyro" ? "rgba(255,120,0,0.75)" : "rgba(255,255,255,0.30)";
+        vc.lineWidth = 2;
+        vc.shadowBlur = 18 + pulse * 18;
+        vc.shadowColor = type === "pyro" ? "#ff6a00" : "#ffffff";
+        vc.stroke();
+
+        vc.restore();
+    }
+
+    function drawThroneCinematic() {
+        var vc = v37Ctx;
+        var W = v37Canvas.width;
+        var H = v37Canvas.height;
+        var cx = W / 2;
+        var cy = H * 0.56;
+        var f = throneFrame;
+        var prog = Math.min(1, f / throneDuration);
+
+        vc.setTransform(1, 0, 0, 1, 0, 0);
+
+        // Background
+        var bg = vc.createRadialGradient(cx, cy, 20, cx, cy, Math.max(W, H));
+        bg.addColorStop(0, "#1a0033");
+        bg.addColorStop(0.38, "#090014");
+        bg.addColorStop(1, "#000000");
+        vc.fillStyle = bg;
+        vc.fillRect(0, 0, W, H);
+
+        // Stars
+        for (var i = 0; i < 180; i++) {
+            var sx = (i * 173 + f * 0.12) % W;
+            var sy = (i * 113) % H;
+            var tw = Math.sin(f * 0.04 + i) * 0.5 + 0.5;
+
+            vc.globalAlpha = 0.15 + tw * 0.55;
+            vc.fillStyle = i % 9 === 0 ? "#EA80FC" : "#ffffff";
+            vc.fillRect(sx, sy, 2, 2);
+        }
+        vc.globalAlpha = 1;
+
+        var shake = 0;
+        if (f > 80 && f < 470) {
+            shake = Math.sin(f * 0.65) * (2 + Math.min(22, f * 0.035));
+        }
+
+        vc.save();
+        vc.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+        var scale = Math.min(2, W / 1100);
+        var crackProgress = Math.min(1, Math.max(0, (f - 35) / 210));
+        var breakProgress = Math.min(1, Math.max(0, (f - 180) / 260));
+        var collapseProgress = Math.min(1, Math.max(0, (f - 360) / 170));
+
+        // Anchor planets
+        var nodes = [
+            { x: W * 0.18, y: H * 0.24, r: 38 * scale, type: "sand", snapStart: 210 },
+            { x: W * 0.82, y: H * 0.22, r: 42 * scale, type: "nature", snapStart: 260 },
+            { x: W * 0.22, y: H * 0.76, r: 36 * scale, type: "void", snapStart: 310 },
+            { x: W * 0.78, y: H * 0.78, r: 34 * scale, type: "pyro", snapStart: 360 }
+        ];
+
+        for (var n = 0; n < nodes.length; n++) {
+            var node = nodes[n];
+            var snap = Math.min(1.4, Math.max(0, (f - node.snapStart) / 110));
+            var pulse = Math.sin(f * 0.08 + n) * 0.5 + 0.5;
+            var nodeAlpha = 0.55 + pulse * 0.35 - Math.max(0, snap - 1) * 0.4;
+
+            var color = node.type === "pyro" ? "#ff6a00" :
+                        node.type === "void" ? "#DA70D6" :
+                        node.type === "nature" ? "#69f0ae" : "#ffb74d";
+
+            drawThroneAnchorThread(
+                vc,
+                node.x,
+                node.y,
+                cx,
+                cy,
+                snap,
+                color,
+                f
+            );
+
+            drawThronePlanetNode(
+                vc,
+                node.x,
+                node.y,
+                node.r * (1 + snap * 0.12),
+                node.type,
+                pulse,
+                Math.max(0.15, nodeAlpha)
+            );
+        }
+
+        // Throne itself
+        if (collapseProgress < 1) {
+            drawThroneBase(
+                vc,
+                cx,
+                cy,
+                scale * (1 - collapseProgress * 0.18),
+                1 - collapseProgress * 0.85,
+                crackProgress,
+                f
+            );
+        }
+
+        // Throne chunks
+        if (breakProgress > 0) {
+            for (var c = 0; c < 34; c++) {
+                var ang = c * 0.57 + rand(c) * 1.2;
+                var dist = (80 + c * 13) * breakProgress * scale;
+                var chunk = {
+                    x: cx + Math.cos(ang) * dist,
+                    y: cy + Math.sin(ang) * dist * 0.62 - breakProgress * 50 * scale,
+                    rot: rand(c * 3.1) * Math.PI,
+                    spin: (rand(c * 5.7) - 0.5) * 3.5,
+                    size: (12 + rand(c * 9.2) * 28) * scale,
+                    seed: c
+                };
+
+                drawThroneChunk(vc, chunk, breakProgress, Math.max(0, 1 - collapseProgress * 1.05));
+            }
+        }
+
+        // Implosion / crystal formation
+        if (collapseProgress > 0) {
+            var impR = (220 - collapseProgress * 190) * scale;
+            var impGrad = vc.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, impR));
+            impGrad.addColorStop(0, "rgba(255,255,255," + (0.85 * collapseProgress) + ")");
+            impGrad.addColorStop(0.25, "rgba(218,112,214," + (0.55 * collapseProgress) + ")");
+            impGrad.addColorStop(0.65, "rgba(74,20,140," + (0.25 * collapseProgress) + ")");
+            impGrad.addColorStop(1, "rgba(0,0,0,0)");
+
+            vc.fillStyle = impGrad;
+            vc.beginPath();
+            vc.arc(cx, cy, Math.max(1, impR), 0, Math.PI * 2);
+            vc.fill();
+        }
+
+        if (f > 430) {
+            var crystalP = Math.min(1, (f - 430) / 130);
+            var cs = scale * (18 + crystalP * 34);
+
+            vc.save();
+            vc.translate(cx, cy);
+            vc.rotate(f * 0.02);
+            vc.globalAlpha = crystalP;
+
+            vc.fillStyle = "#DA70D6";
+            vc.shadowBlur = 35;
+            vc.shadowColor = "#DA70D6";
+
+            vc.beginPath();
+            vc.moveTo(0, -cs);
+            vc.lineTo(cs * 0.55, 0);
+            vc.lineTo(0, cs);
+            vc.lineTo(-cs * 0.55, 0);
+            vc.closePath();
+            vc.fill();
+
+            vc.fillStyle = "rgba(255,255,255,0.85)";
+            vc.beginPath();
+            vc.moveTo(0, -cs * 0.45);
+            vc.lineTo(cs * 0.18, 0);
+            vc.lineTo(0, cs * 0.45);
+            vc.lineTo(-cs * 0.18, 0);
+            vc.closePath();
+            vc.fill();
+
+            vc.restore();
+        }
+
+        vc.restore();
+
+        // Vignette
+        var vig = vc.createRadialGradient(cx, cy, H * 0.16, cx, cy, Math.max(W, H) * 0.78);
+        vig.addColorStop(0, "rgba(0,0,0,0)");
+        vig.addColorStop(1, "rgba(0,0,0,0.82)");
+        vc.fillStyle = vig;
+        vc.fillRect(0, 0, W, H);
+
+        drawV37Letterbox(vc, W, H);
+        drawV37Subtitles(vc, throneLines, f, W, H);
+        drawV37SkipHint(vc, W, H);
+    }
+
+    // ------------------------------------------------------------
+    // HOOK: UPDATE LOOP
+    // ------------------------------------------------------------
+    var _updateV37 = update;
+
+    update = function () {
+        if (warpActive) {
+            warpFrame++;
+            clearV37GameFX();
+            drawWarpCinematic();
+
+            if (warpFrame >= warpDuration) {
+                finishWarpCinematic();
+            }
+
+            return;
+        }
+
+        if (throneActive) {
+            throneFrame++;
+            clearV37GameFX();
+            drawThroneCinematic();
+
+            if (throneFrame >= throneDuration) {
+                finishThroneCinematic();
+            }
+
+            return;
+        }
+
+        _updateV37.call(this);
+    };
+
+    // ------------------------------------------------------------
+    // HOOK: WARP TRAVEL STATE
+    // ------------------------------------------------------------
+    var _handleWarpTravelV37 = handleWarpTravel;
+
+    handleWarpTravel = function () {
+        if (warpActive) return;
+
+        if (currentState === STATES.WARP_TRAVEL) {
+            startWarpCinematic(function () {
+                currentState = STATES.CINEMATIC_THRONE;
+                resetLevel(true);
+                gameRunning = true;
+            });
+
+            return;
+        }
+
+        _handleWarpTravelV37.call(this);
+    };
+
+    // ------------------------------------------------------------
+    // HOOK: NIHILUS DEATH -> THRONE DISINTEGRATION
+    // ------------------------------------------------------------
+    var _baseBossTakeDamageV37 = BaseBoss.prototype.takeDamage;
+
+    BaseBoss.prototype.takeDamage = function (a) {
+        var wasDead = this.dead;
+
+        _baseBossTakeDamageV37.call(this, a);
+
+        if (
+            !wasDead &&
+            this.dead &&
+            typeof NihilusVoidKing !== "undefined" &&
+            this instanceof NihilusVoidKing &&
+            throne
+        ) {
+            pendingThroneCinematic = true;
+        }
+    };
+
+    var _handleGroundCombatV37 = handleGroundCombat;
+
+    handleGroundCombat = function () {
+        if (pendingThroneCinematic && !throneActive && !warpActive) {
+            pendingThroneCinematic = false;
+
+            boss = null;
+            isThroneDestroying = false;
+            throneDestroyTimer = 0;
+            throneChunks = [];
+
+            score += 1000;
+            updateHUD();
+            stopMusic();
+
+            gameRunning = false;
+            playerControlLocked = true;
+            clearV37GameFX();
+
+            startThroneCinematic(function () {
+                if (throne) throne.broken = true;
+
+                voidCrystalPresent = true;
+                document.getElementById("pickup-prompt").style.display = "block";
+
+                gameRunning = true;
+                playerControlLocked = false;
+
+                if (typeof playSound === "function") {
+                    playSound("shatter");
+                    playSound("warp");
+                }
+            });
+
+            return;
+        }
+
+        _handleGroundCombatV37.call(this);
+    };
+
+})();
+
+/* ===== END v3.7 WARP + THRONE CINEMATIC PATCH ===== */
 
 function loop(){update();draw();requestAnimationFrame(loop);}
 initBackground();loop();
